@@ -1,20 +1,11 @@
 {
   "version": 2,
   "builds": [
-    {
-      "src": "main.py",
-      "use": "@vercel/python",
-      "config": { "maxLambdaSize": "50mb" }
-    }
+    { "src": "favicon.ico", "use": "@vercel/static" },
+    { "src": "main.py", "use": "@vercel/python", "config": { "maxLambdaSize": "50mb" } }
   ],
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "main.py"
-    }
-  ],
-  "env": {
-    "PYTHONUNBUFFERED": "1",
-    "PYTHONPATH": "."
-  }
+    { "src": "/favicon.ico", "dest": "favicon.ico" },
+    { "src": "/(.*)", "dest": "main.py" }
+  ]
 }

@@ -692,14 +692,14 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
+    
     # Breath-labeled routes live under /sigils
     app.include_router(sigils_router, prefix="/sigils", tags=["sigils"])
 
     @app.get("/health", summary="Health check", response_class=JSONResponse, tags=["system"])
     def health() -> dict[str, str]:
         return {"status": "ok"}
-
+    
     @app.get("/", summary="The Portal (HTML for browsers, JSON for machines)", response_class=HTMLResponse, tags=["system"])
     def root(request: Request, format: str | None = None) -> Any:
         accept = (request.headers.get("accept") or "").lower()

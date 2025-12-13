@@ -17,9 +17,29 @@ class KaiMoment(BaseModel):
 
 
 class SigilEntry(BaseModel):
-    """One canonical registry entry: URL + decoded payload (loose)."""
+    """
+    One canonical registry entry: URL + decoded payload (loose).
+
+    NOTE:
+    We keep `payload` as the full truth-object, but we ALSO expose
+    top-level Kai + identity fields for:
+      - jq ergonomics (.pulse instead of .payload.pulse)
+      - faster client sorting/filtering without digging into payload
+    """
 
     url: str
+
+    # Flattened convenience fields (never Chronos; never required)
+    pulse: int | None = None
+    beat: int | None = None
+    stepIndex: int | None = None
+    chakraDay: str | None = None
+
+    # Flattened identity/provenance convenience fields
+    userPhiKey: str | None = None
+    kaiSignature: str | None = None
+
+    # Full decoded payload (the canonical truth object)
     payload: SigilPayloadLoose
 
 
