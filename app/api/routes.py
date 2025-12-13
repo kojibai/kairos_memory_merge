@@ -3,14 +3,42 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, File, Query, UploadFile
+from fastapi.responses import JSONResponse
 
 from app.core.state_store import get_store
 from app.models.state import ExhaleResponse, InhaleResponse, SigilState
 
-
 router = APIRouter()
+
+_ALLOWED_JSON_CT: set[str] = {
+    "application/json",
+    "text/json",
+    "application/*+json",
+    "application/octet-stream",  # common when tools don’t set JSON correctly
+}
+
+
+def _safe_name(f: UploadFile | None) -> str:
+    name = (getattr(f, "filename", None) or "").strip()
+    if not name:
+        return "krystal.json"
+    return name if len(name) <= 160 else (name[:120] + "…" + name[-30:])
+
+
+def _err(status_code: int, msg: str, *, extra: dict | None = None) -> JSONResponse:
+    payload = InhaleResponse(status="error", errors=[msg]).model_dump(exclude_none=False)
+    if extra:
+        payload.update(extra)
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+async def _read_limited(uf: UploadFile, *, limit: int) -> bytes:
+    # read only up to limit+1 to enforce a hard cap
+    blob = await uf.read(limit + 1)
+    if len(blob) > limit:
+        raise ValueError(f"{_safe_name(uf)} exceeds max_bytes_per_file={limit} (got {len(blob)} bytes)")
+    return blob
 
 
 @router.post(
@@ -19,7 +47,16 @@ router = APIRouter()
     response_model=InhaleResponse,
 )
 async def inhale(
-    files: list[UploadFile] = File(..., description="One or more JSON files (memory krystals)"),
+    # Preferred: multi-file uploads
+    files: list[UploadFile] | None = File(
+        default=None,
+        description="One or more JSON files (memory krystals). Field name: 'files'.",
+    ),
+    # Legacy: single file upload
+    file: UploadFile | None = File(
+        default=None,
+        description="Legacy single-file field name: 'file'.",
+    ),
     include_state: bool = Query(
         True,
         description="If true, include the merged global state in the response (deterministic ordering).",
@@ -28,41 +65,100 @@ async def inhale(
         True,
         description="If true, include the SigilExplorer-compatible URL export list in the response.",
     ),
+    max_files: int = Query(
+        64,
+        ge=1,
+        le=512,
+        description="Safety cap on number of files per request.",
+    ),
     max_bytes_per_file: int = Query(
         10_000_000,
         ge=1_000,
         le=100_000_000,
-        description="Safety cap per file (bytes). Rejects any file larger than this.",
+        description="Safety cap per file (bytes).",
+    ),
+    max_total_bytes: int = Query(
+        50_000_000,
+        ge=10_000,
+        le=500_000_000,
+        description="Safety cap on total bytes across all uploaded files.",
     ),
 ) -> InhaleResponse:
-    """
-    Breath label:
-      - INHALE = upload JSON krystals
-      - This endpoint merges all krystals into the canonical registry
-      - Ordering + conflict resolution uses Kai time (pulse, beat, stepIndex), NEVER Chronos
-    """
-    if not files:
-        raise HTTPException(status_code=400, detail="No files received for inhale.")
+    incoming: list[UploadFile] = []
+    if files:
+        incoming.extend(files)
+    if file is not None:
+        incoming.append(file)
+
+    if not incoming:
+        return _err(
+            400,
+            "No files received. Send multipart field 'files' (preferred) or legacy 'file'.",
+        )
+
+    if len(incoming) > max_files:
+        return _err(
+            413,
+            f"Too many files: received={len(incoming)} exceeds max_files={max_files}.",
+        )
 
     store = get_store()
 
+    total_bytes = 0
     file_blobs: list[tuple[str, bytes]] = []
-    for f in files:
-        name = f.filename or "krystal.json"
-        blob = await f.read()
+    warnings: list[str] = []
 
-        if len(blob) > max_bytes_per_file:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large: {name} ({len(blob)} bytes) exceeds max_bytes_per_file={max_bytes_per_file}.",
-            )
+    for uf in incoming:
+        name = _safe_name(uf)
+        try:
+            ct = (uf.content_type or "").strip().lower()
+            if ct and (ct not in _ALLOWED_JSON_CT) and (not ct.endswith("+json")):
+                warnings.append(f"{name}: unexpected content-type '{ct}' (still attempting JSON parse).")
 
-        file_blobs.append((name, blob))
+            try:
+                blob = await _read_limited(uf, limit=max_bytes_per_file)
+            except ValueError as ve:
+                return _err(413, str(ve), extra={"files_received": len(incoming)})
 
-    report = store.inhale_files(file_blobs)
+            total_bytes += len(blob)
+            if total_bytes > max_total_bytes:
+                return _err(
+                    413,
+                    f"Total upload too large: total_bytes={total_bytes} exceeds max_total_bytes={max_total_bytes}.",
+                    extra={"files_received": len(incoming)},
+                )
 
-    state: SigilState | None = store.get_state() if include_state else None
-    urls: list[str] | None = store.exhale_urls() if include_urls else None
+            file_blobs.append((name, blob))
+        finally:
+            # prevent fd leaks under heavy multipart loads
+            try:
+                await uf.close()
+            except Exception:
+                pass
+
+    # Merge (Kai-only). Bad krystals should not poison the run.
+    try:
+        report = store.inhale_files(file_blobs)
+    except Exception as e:
+        return _err(
+            500,
+            f"INHALE failed: {type(e).__name__}: {e}",
+            extra={"files_received": len(file_blobs)},
+        )
+
+    if warnings:
+        report.errors.extend(warnings)
+
+    state: SigilState | None = None
+    urls: list[str] | None = None
+
+    # Avoid duplicate work: if we compute state, we already have urls in state.urls
+    if include_state:
+        state = store.get_state()
+        if include_urls:
+            urls = list(state.urls)
+    elif include_urls:
+        urls = store.exhale_urls()
 
     return InhaleResponse(
         status="ok",
@@ -84,8 +180,7 @@ async def inhale(
     response_model=SigilState,
 )
 def state() -> SigilState:
-    store = get_store()
-    return store.get_state()
+    return get_store().get_state()
 
 
 @router.get(
@@ -96,28 +191,10 @@ def state() -> SigilState:
 def exhale(
     mode: Literal["urls", "state"] = Query(
         "urls",
-        description="urls = SigilExplorer import format (JSON list of canonical URLs); state = full merged state object",
+        description="urls = JSON list of canonical URLs; state = full merged state object",
     ),
 ) -> ExhaleResponse:
-    """
-    Breath label:
-      - EXHALE = download the merged result
-      - mode=urls matches SigilExplorer import/export format: JSON list of URLs
-      - mode=state returns the full merged payload registry (deterministic ordering)
-    """
     store = get_store()
-
     if mode == "urls":
-        return ExhaleResponse(
-            status="ok",
-            mode="urls",
-            urls=store.exhale_urls(),
-            state=None,
-        )
-
-    return ExhaleResponse(
-        status="ok",
-        mode="state",
-        urls=None,
-        state=store.get_state(),
-    )
+        return ExhaleResponse(status="ok", mode="urls", urls=store.exhale_urls(), state=None)
+    return ExhaleResponse(status="ok", mode="state", urls=None, state=store.get_state())

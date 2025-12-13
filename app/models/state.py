@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from app.models.payload import SigilPayloadLoose
 
@@ -18,25 +18,68 @@ class KaiMoment(BaseModel):
 
 class SigilEntry(BaseModel):
     """
-    One canonical registry entry.
+    One canonical registry entry: URL + decoded payload (loose).
 
-    UX guarantee:
-    - Top-level Kai + identity fields exist for jq / clients.
-    - Full original payload is preserved under `payload`.
+    UX Contract:
+    - We ALWAYS expose top-level convenience fields (pulse/beat/stepIndex/etc)
+      so callers can do `.state.registry | map(.pulse)` without digging into `.payload.*`.
+    - The authoritative source remains `.payload` (single source of truth).
     """
 
-    url: str = Field(..., description="Canonical URL key (absolute, deterministic)")
+    url: str
+    payload: SigilPayloadLoose
 
-    # Convenience mirrors of payload fields (so callers don’t have to dig into .payload.*)
-    pulse: int = Field(0, description="Kai pulse (0 if missing)")
-    beat: int = Field(0, description="Kai beat (0 if missing)")
-    stepIndex: int = Field(0, description="Kai stepIndex (0 if missing)")
+    # ──────────────────────────────────────────────────────────────────
+    # Convenience projections (computed from payload; output-only)
+    # ──────────────────────────────────────────────────────────────────
 
-    chakraDay: str | None = Field(default=None, description="Chakra day label (if present)")
-    userPhiKey: str | None = Field(default=None, description="Primary identity marker (if present)")
-    kaiSignature: str | None = Field(default=None, description="Kai Signature / seal (if present)")
+    @computed_field(return_type=int)
+    def pulse(self) -> int:
+        return int(self.payload.pulse or 0)
 
-    payload: SigilPayloadLoose = Field(..., description="Full decoded payload (extras preserved)")
+    @computed_field(return_type=int)
+    def beat(self) -> int:
+        return int(self.payload.beat or 0)
+
+    @computed_field(return_type=int)
+    def stepIndex(self) -> int:
+        return int(self.payload.stepIndex or 0)
+
+    @computed_field(return_type=str | None)
+    def chakraDay(self) -> str | None:
+        return self.payload.chakraDay
+
+    @computed_field(return_type=str | None)
+    def kaiSignature(self) -> str | None:
+        return self.payload.kaiSignature
+
+    @computed_field(return_type=str | None)
+    def originUrl(self) -> str | None:
+        return self.payload.originUrl
+
+    @computed_field(return_type=str | None)
+    def parentUrl(self) -> str | None:
+        return self.payload.parentUrl
+
+    @computed_field(return_type=str | None)
+    def userPhiKey(self) -> str | None:
+        return self.payload.userPhiKey
+
+    @computed_field(return_type=str | None)
+    def phiKey(self) -> str | None:
+        return self.payload.phiKey
+
+    @computed_field(return_type=str | None)
+    def phikey(self) -> str | None:
+        return self.payload.phikey
+
+    @computed_field(return_type=str | None)
+    def id(self) -> str | None:
+        """
+        A single best-effort identity projection (does not overwrite anything).
+        Priority: userPhiKey → phikey → phiKey
+        """
+        return self.payload.userPhiKey or self.payload.phikey or self.payload.phiKey
 
 
 class SigilState(BaseModel):
@@ -50,11 +93,15 @@ class SigilState(BaseModel):
     """
 
     spec: str = Field(default="KKS-1.0", description="Kai-Klok spec used for ordering/merging")
-    total_urls: int = Field(default=0, description="Count of registry entries")
-    latest: KaiMoment = Field(default_factory=KaiMoment, description="Latest KaiMoment across registry")
+    total_urls: int = 0
+    latest: KaiMoment = Field(default_factory=KaiMoment)
 
-    registry: list[SigilEntry] = Field(default_factory=list, description="Ordered entries (Kai-desc)")
-    urls: list[str] = Field(default_factory=list, description="Ordered URL list (Kai-desc)")
+    # A deterministic seal (hash) for cache/ETag-like behavior.
+    # Computed by the store (not Chronos) and stable across nodes given same registry.
+    state_seal: str = Field(default="", description="Deterministic seal of the exhaled state")
+
+    registry: list[SigilEntry] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
 
 
 class InhaleReport(BaseModel):
