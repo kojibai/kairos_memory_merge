@@ -1,0 +1,11 @@
+fastapi>=0.110.0,<1.0.0
+uvicorn[standard]>=0.27.0,<1.0.0
+
+# multipart/form-data for INHALE (file uploads)
+python-multipart>=0.0.9
+
+# validation/models
+pydantic>=2.6.0,<3.0.0
+
+# tests
+pytest>=8.0.0,<9.0.0
