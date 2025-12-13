@@ -20,7 +20,6 @@ def _default_base_origin() -> str:
     Base origin is ONLY used when:
       - an input is relative, OR
       - an input is a bare token (we convert to /stream/p/<token>)
-
     Absolute URLs keep their own origin and are not rewritten.
     """
     return os.getenv("KAI_BASE_ORIGIN", "https://example.invalid").strip() or "https://example.invalid"
@@ -31,8 +30,7 @@ def _safe_int(name: str, default: int) -> int:
     if not raw:
         return default
     try:
-        v = int(raw)
-        return v
+        return int(raw)
     except Exception:
         return default
 
@@ -47,16 +45,13 @@ def _atomic_write_text(path: Path, text: str, *, keep_backup: bool = True) -> No
     tmp = path.with_suffix(path.suffix + ".tmp")
     bak = path.with_suffix(path.suffix + ".bak")
 
-    # write tmp (same dir for atomic replace)
     with tmp.open("w", encoding="utf-8") as f:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())
 
-    # backup current
     if keep_backup and path.exists():
         try:
-            # best effort; do not fail write if backup fails
             bak.write_bytes(path.read_bytes())
         except Exception:
             pass
@@ -65,9 +60,6 @@ def _atomic_write_text(path: Path, text: str, *, keep_backup: bool = True) -> No
 
 
 def _load_json_file_best_effort(path: Path) -> dict[str, Any] | None:
-    """
-    Load dict JSON from path (canonical or not). Returns None on failure.
-    """
     try:
         blob = path.read_bytes()
         obj = loads_json_bytes(blob, name=str(path))
@@ -76,10 +68,9 @@ def _load_json_file_best_effort(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _compute_state_seal(urls: list[str]) -> str:
+def _compute_seal_from_urls(urls: list[str]) -> str:
     """
-    Deterministic seal for the exhaled snapshot (NOT a security boundary).
-    blake2b over canonical JSON of the ordered URL list.
+    Deterministic seal for cache/ETag-like behavior (NOT a security boundary).
     """
     blob = dumps_canonical_json({"urls": urls}).encode("utf-8")
     return hashlib.blake2b(blob, digest_size=16).hexdigest()
@@ -98,9 +89,8 @@ class SigilStateStore:
     - EXHALE order is Kai-desc, tie-broken by URL string.
     - No Chronos fields are created or consulted.
 
-    Robustness:
-    - Optional persistence with atomic writes + last-known-good backup.
-    - Corrupt disk state fails closed to empty (and tries .bak).
+    Production throughput:
+    - Exhale/state are cached and recomputed ONLY after inhale mutates the registry.
     """
 
     base_origin: str
@@ -109,8 +99,13 @@ class SigilStateStore:
     _lock: threading.RLock
     _registry: dict[str, SigilPayloadLoose]
 
-    # Optional cap for runaway registries (0 = disabled)
+    # optional cap for runaway registries (0 = disabled)
     _prune_keep: int
+
+    # cache (valid until next mutate)
+    _cache_urls: list[str] | None
+    _cache_seal: str
+    _cache_state: SigilState | None
 
     def __init__(self, *, base_origin: str | None = None, persist_path: str | None = None) -> None:
         self.base_origin = (base_origin or _default_base_origin()).strip()
@@ -119,8 +114,18 @@ class SigilStateStore:
         self._registry = {}
         self._prune_keep = _safe_int("KAI_REGISTRY_KEEP", 0)
 
+        self._cache_urls = None
+        self._cache_seal = ""
+        self._cache_state = None
+
         if self.persist_path:
             self._load_from_disk_best_effort()
+            self._invalidate_cache()
+
+    def _invalidate_cache(self) -> None:
+        self._cache_urls = None
+        self._cache_seal = ""
+        self._cache_state = None
 
     # ──────────────────────────────────────────────────────────────────
     # Persistence (optional)
@@ -169,15 +174,10 @@ class SigilStateStore:
         try:
             _atomic_write_text(self.persist_path, dumps_canonical_json(obj), keep_backup=True)
         except Exception:
-            # Persistence failure must never break the API.
-            # Memory state remains authoritative.
+            # persistence failure must never break the API
             return
 
     def _maybe_prune(self) -> None:
-        """
-        Optional safety valve: keep only newest N entries (Kai-desc) if configured.
-        Disabled by default (KAI_REGISTRY_KEEP=0).
-        """
         keep = self._prune_keep
         if keep <= 0:
             return
@@ -185,16 +185,54 @@ class SigilStateStore:
             return
 
         ordered = build_ordered_urls(self._registry)  # Kai-desc
-        survivors = set(ordered[:keep])
-
         next_reg: dict[str, SigilPayloadLoose] = {}
         for url in ordered[:keep]:
             p = self._registry.get(url)
             if p is not None:
                 next_reg[url] = p
-
         self._registry = next_reg
-        _ = survivors  # (silence linters)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Cache builders (called only when needed)
+    # ──────────────────────────────────────────────────────────────────
+
+    def _ensure_urls_cache(self) -> None:
+        if self._cache_urls is not None:
+            return
+        ordered = build_ordered_urls(self._registry)  # Kai-desc
+        self._cache_urls = ordered
+        self._cache_seal = _compute_seal_from_urls(ordered)
+
+    def _ensure_state_cache(self) -> None:
+        if self._cache_state is not None:
+            return
+        self._ensure_urls_cache()
+        assert self._cache_urls is not None
+
+        entries: list[SigilEntry] = []
+        payloads: list[SigilPayloadLoose] = []
+
+        for url in self._cache_urls:
+            p = self._registry.get(url)
+            if p is None:
+                continue
+            entries.append(SigilEntry(url=url, payload=p))
+            payloads.append(p)
+
+        if payloads:
+            lt = latest_kai(payloads)
+            latest = KaiMoment(pulse=int(lt.pulse), beat=int(lt.beat), stepIndex=int(lt.stepIndex))
+        else:
+            latest = KaiMoment()
+
+        self._cache_state = SigilState(
+            spec="KKS-1.0",
+            total_urls=len(entries),
+            latest=latest,
+            state_seal=self._cache_seal,
+            registry=entries,
+            urls=self._cache_urls,
+        )
 
     # ──────────────────────────────────────────────────────────────────
     # Breath actions
@@ -208,6 +246,7 @@ class SigilStateStore:
         with self._lock:
             report = inhale_files_into_registry(self._registry, files, base_origin=self.base_origin)
             self._maybe_prune()
+            self._invalidate_cache()
 
         self._save_to_disk_best_effort()
         return report
@@ -215,49 +254,48 @@ class SigilStateStore:
     def exhale_urls(self) -> list[str]:
         """
         EXHALE (urls mode): SigilExplorer-compatible export list.
-        This matches the frontend import format: JSON array of canonical URLs.
+        Cached (fast) — recomputed only after inhale.
         """
         with self._lock:
-            return build_ordered_urls(self._registry)
+            self._ensure_urls_cache()
+            assert self._cache_urls is not None
+            return self._cache_urls
+
+    def exhale_urls_page(self, *, offset: int, limit: int) -> tuple[list[str], int]:
+        """
+        Cached paging for huge registries.
+        Returns (page_urls, total_urls).
+        """
+        o = max(0, int(offset))
+        l = max(1, int(limit))
+        with self._lock:
+            self._ensure_urls_cache()
+            assert self._cache_urls is not None
+            total = len(self._cache_urls)
+            return (self._cache_urls[o : o + l], total)
+
+    def get_seal(self) -> str:
+        """
+        Fast deterministic seal (ETag candidate). Cached.
+        """
+        with self._lock:
+            self._ensure_urls_cache()
+            return self._cache_seal
 
     def get_state(self) -> SigilState:
         """
-        EXHALE (state mode): full merged registry (Kai-ordered),
-        with top-level convenience fields on each entry.
+        EXHALE (state mode): full merged registry (Kai-ordered).
+        Cached (fast) — recomputed only after inhale.
         """
         with self._lock:
-            ordered_urls = build_ordered_urls(self._registry)  # Kai-desc
-            entries: list[SigilEntry] = []
-            payloads: list[SigilPayloadLoose] = []
-
-            for url in ordered_urls:
-                p = self._registry.get(url)
-                if p is None:
-                    continue
-                entries.append(SigilEntry(url=url, payload=p))
-                payloads.append(p)
-
-            # latest_kai should be Kai-only; still guard empty.
-            if payloads:
-                lt = latest_kai(payloads)
-                latest = KaiMoment(pulse=int(lt.pulse), beat=int(lt.beat), stepIndex=int(lt.stepIndex))
-            else:
-                latest = KaiMoment()
-
-            seal = _compute_state_seal(ordered_urls)
-
-            return SigilState(
-                spec="KKS-1.0",
-                total_urls=len(entries),
-                latest=latest,
-                state_seal=seal,
-                registry=entries,
-                urls=ordered_urls,
-            )
+            self._ensure_state_cache()
+            assert self._cache_state is not None
+            # defensive copy so callers can’t mutate cached object
+            return self._cache_state.model_copy(deep=False)
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Singleton store accessor (simple + robust)
+# Singleton store accessor
 # ──────────────────────────────────────────────────────────────────────
 
 _STORE: SigilStateStore | None = None
