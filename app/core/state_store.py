@@ -37,18 +37,6 @@ def _atomic_write_text(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def _is_missing(v: object) -> bool:
-    if v is None:
-        return True
-    if isinstance(v, str):
-        return len(v.strip()) == 0
-    if isinstance(v, (list, tuple, set)):
-        return len(v) == 0
-    if isinstance(v, dict):
-        return len(v) == 0
-    return False
-
-
 def _pick_str(*vals: object) -> str | None:
     for v in vals:
         if isinstance(v, str) and v.strip():
@@ -56,26 +44,9 @@ def _pick_str(*vals: object) -> str | None:
     return None
 
 
-def _payload_dict(p: SigilPayloadLoose) -> dict[str, Any]:
-    # include extras (if your model allows them) so we can read legacy keys safely
-    return p.model_dump(exclude_none=False)
-
-
-def _extract_chakra_day(p: SigilPayloadLoose) -> str | None:
-    d = _payload_dict(p)
-    # canonical field first, then legacy short key
-    return _pick_str(d.get("chakraDay"), d.get("c"))
-
-
-def _extract_user_phikey(p: SigilPayloadLoose) -> str | None:
-    d = _payload_dict(p)
-    # prefer explicit userPhiKey, then older variants
-    return _pick_str(d.get("userPhiKey"), d.get("phiKey"), d.get("phikey"))
-
-
-def _extract_kai_signature(p: SigilPayloadLoose) -> str | None:
-    d = _payload_dict(p)
-    return _pick_str(d.get("kaiSignature"))
+def _user_phikey(p: SigilPayloadLoose) -> str | None:
+    # Prefer userPhiKey, else legacy identity aliases
+    return _pick_str(p.userPhiKey, p.phiKey, p.phikey)
 
 
 @dataclass(slots=True)
@@ -92,8 +63,8 @@ class SigilStateStore:
     - No Chronos fields are created or consulted.
 
     UX:
-    - State EXHALE returns registry entries that include top-level Kai + identity fields
-      (pulse/beat/stepIndex/chakraDay/userPhiKey/kaiSignature) for jq + client ergonomics,
+    - State EXHALE returns registry entries with top-level mirrors:
+      pulse/beat/stepIndex/chakraDay/userPhiKey/kaiSignature for jq + clients,
       while preserving the full payload under `payload`.
     """
 
@@ -121,8 +92,7 @@ class SigilStateStore:
         """
         Robust loader:
         - Preferred: {"registry": {url: payload_obj, ...}}
-        - Fallback: ANY JSON shape (list of urls, nested structures, prior exports)
-          is re-ingested through the same inhale extraction engine.
+        - Fallback: ANY JSON shape is re-ingested through inhale extraction engine.
         """
         assert self.persist_path is not None
 
@@ -149,7 +119,6 @@ class SigilStateStore:
                 try:
                     next_reg[url.strip()] = SigilPayloadLoose.model_validate(payload_obj)
                 except Exception:
-                    # Skip malformed entry (never crash)
                     continue
 
             with self._lock:
@@ -178,7 +147,6 @@ class SigilStateStore:
             obj: dict[str, Any] = {
                 "spec": "KKS-1.0",
                 "base_origin": self.base_origin,
-                # canonical truth store: URL -> payload object
                 "registry": {u: p.model_dump(exclude_none=False) for (u, p) in self._registry.items()},
             }
 
@@ -203,7 +171,6 @@ class SigilStateStore:
     def exhale_urls(self) -> list[str]:
         """
         EXHALE (urls mode): SigilExplorer-compatible export list.
-        This matches the frontend import format: JSON array of canonical URLs.
         """
         with self._lock:
             return build_ordered_urls(self._registry)
@@ -214,8 +181,8 @@ class SigilStateStore:
 
         Output guarantees:
         - registry is Kai-desc (most recent first)
-        - each registry entry exposes top-level Kai + identity convenience fields
-          while retaining the canonical truth object under `payload`.
+        - each entry exposes top-level Kai + identity convenience fields
+          while retaining canonical truth under `payload`.
         """
         with self._lock:
             ordered_urls = build_ordered_urls(self._registry)
@@ -233,12 +200,12 @@ class SigilStateStore:
                 entries.append(
                     SigilEntry(
                         url=url,
-                        pulse=p.pulse,
-                        beat=p.beat,
-                        stepIndex=p.stepIndex,
-                        chakraDay=_extract_chakra_day(p),
-                        userPhiKey=_extract_user_phikey(p),
-                        kaiSignature=_extract_kai_signature(p),
+                        pulse=int(p.pulse or 0),
+                        beat=int(p.beat or 0),
+                        stepIndex=int(p.stepIndex or 0),
+                        chakraDay=_pick_str(p.chakraDay),
+                        userPhiKey=_user_phikey(p),
+                        kaiSignature=_pick_str(p.kaiSignature),
                         payload=p,
                     )
                 )
@@ -246,7 +213,11 @@ class SigilStateStore:
             # Latest is computed purely from Kai tuple (no Chronos)
             if payloads:
                 lt = latest_kai(payloads)
-                latest = KaiMoment(pulse=int(lt.pulse), beat=int(lt.beat), stepIndex=int(lt.stepIndex))
+                latest = KaiMoment(
+                    pulse=int(getattr(lt, "pulse", 0) or 0),
+                    beat=int(getattr(lt, "beat", 0) or 0),
+                    stepIndex=int(getattr(lt, "stepIndex", 0) or 0),
+                )
             else:
                 latest = KaiMoment(pulse=0, beat=0, stepIndex=0)
 
@@ -271,10 +242,6 @@ def get_store() -> SigilStateStore:
     Global store. Configuration via env:
       - KAI_BASE_ORIGIN: base for relative URLs / bare tokens
       - KAI_STATE_PATH: if set, enables persistence to disk
-
-    Robust behavior:
-    - If disk state is unreadable/corrupt → empty registry, no crash.
-    - If disk state is in an older/unknown shape → re-ingest via inhale engine.
     """
     global _STORE
     if _STORE is None:

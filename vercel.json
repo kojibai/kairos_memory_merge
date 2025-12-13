@@ -1,11 +1,10 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "builds": [
-    { "src": "favicon.ico", "use": "@vercel/static" },
-    { "src": "main.py", "use": "@vercel/python", "config": { "maxLambdaSize": "50mb" } }
+    { "src": "api/index.py", "use": "@vercel/python" }
   ],
   "routes": [
-    { "src": "/favicon.ico", "dest": "favicon.ico" },
-    { "src": "/(.*)", "dest": "main.py" }
+    { "src": "/(.*)", "dest": "api/index.py" }
   ]
 }
