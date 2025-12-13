@@ -481,7 +481,7 @@ def portal_html(manifest: dict[str, Any]) -> str:
         <div class="badge" title="Deterministic portal seal (BLAKE2b-256 over canonical manifest)">
           <span>SEAL</span>
           <span class="sealText" id="sealText" title="{seal_full}">{seal_short}</span>
-          <button class="btn" style="padding:8px 10px; border-radius: 999px;" onclick="copyText('{seal_full}')">COPY</button>
+          <button class="btn" style="padding:8px 10px; border-radius: 999px;" onclick="copyText('{seal_full}')">Remember</button>
         </div>
       </div>
 
