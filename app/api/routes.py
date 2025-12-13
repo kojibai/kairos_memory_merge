@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.core.state_store import get_store
@@ -19,26 +19,66 @@ _ALLOWED_JSON_CT: set[str] = {
 }
 
 
-def _safe_name(f: UploadFile | None) -> str:
-    name = (getattr(f, "filename", None) or "").strip()
-    if not name:
+def _safe_name(name: str | None) -> str:
+    n = (name or "").strip()
+    if not n:
         return "krystal.json"
-    return name if len(name) <= 160 else (name[:120] + "…" + name[-30:])
+    return n if len(n) <= 160 else (n[:120] + "…" + n[-30:])
 
 
-def _err(status_code: int, msg: str, *, extra: dict | None = None) -> JSONResponse:
-    payload = InhaleResponse(status="error", errors=[msg]).model_dump(exclude_none=False)
-    if extra:
-        payload.update(extra)
+def _err(status_code: int, msg: str, *, files_received: int = 0, errors: list[str] | None = None) -> JSONResponse:
+    e = [msg]
+    if errors:
+        e.extend(errors)
+    payload = InhaleResponse(
+        status="error",
+        files_received=files_received,
+        errors=e,
+    ).model_dump(exclude_none=False)
     return JSONResponse(status_code=status_code, content=payload)
 
 
-async def _read_limited(uf: UploadFile, *, limit: int) -> bytes:
-    # read only up to limit+1 to enforce a hard cap
-    blob = await uf.read(limit + 1)
-    if len(blob) > limit:
-        raise ValueError(f"{_safe_name(uf)} exceeds max_bytes_per_file={limit} (got {len(blob)} bytes)")
-    return blob
+async def _read_limited_bytes(uf, *, per_file_limit: int) -> bytes:
+    """
+    Read UploadFile in chunks with a hard cap (per_file_limit).
+    Raises ValueError on overflow.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await uf.read(1024 * 1024)  # 1MB
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > per_file_limit:
+            raise ValueError(f"{_safe_name(getattr(uf, 'filename', None))} exceeds max_bytes_per_file={per_file_limit} (got >{per_file_limit} bytes)")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _collect_uploads(form) -> list:
+    """
+    Collect UploadFile objects from multipart form under:
+      - files (preferred; repeated)
+      - files[] (browser-friendly)
+      - file (legacy single)
+    """
+    items: list = []
+
+    # Starlette FormData supports getlist
+    for key in ("files", "files[]", "file"):
+        try:
+            values = form.getlist(key)
+        except Exception:
+            v = form.get(key)
+            values = [v] if v is not None else []
+
+        for v in values:
+            # UploadFile is a Starlette type; duck-type it safely
+            if hasattr(v, "filename") and hasattr(v, "read"):
+                items.append(v)
+
+    return items
 
 
 @router.post(
@@ -47,16 +87,7 @@ async def _read_limited(uf: UploadFile, *, limit: int) -> bytes:
     response_model=InhaleResponse,
 )
 async def inhale(
-    # Preferred: multi-file uploads
-    files: list[UploadFile] | None = File(
-        default=None,
-        description="One or more JSON files (memory krystals). Field name: 'files'.",
-    ),
-    # Legacy: single file upload
-    file: UploadFile | None = File(
-        default=None,
-        description="Legacy single-file field name: 'file'.",
-    ),
+    request: Request,
     include_state: bool = Query(
         True,
         description="If true, include the merged global state in the response (deterministic ordering).",
@@ -75,7 +106,7 @@ async def inhale(
         10_000_000,
         ge=1_000,
         le=100_000_000,
-        description="Safety cap per file (bytes).",
+        description="Safety cap per file (bytes). Rejects any file larger than this.",
     ),
     max_total_bytes: int = Query(
         50_000_000,
@@ -84,75 +115,87 @@ async def inhale(
         description="Safety cap on total bytes across all uploaded files.",
     ),
 ) -> InhaleResponse:
-    incoming: list[UploadFile] = []
-    if files:
-        incoming.extend(files)
-    if file is not None:
-        incoming.append(file)
+    """
+    Breath label:
+      - INHALE = upload JSON krystals (multipart)
+      - Merges into canonical registry
+      - Ordering + conflict resolution uses Kai tuple only: (pulse, beat, stepIndex)
+      - No Chronos fields are emitted or consulted
+    """
 
-    if not incoming:
+    # Parse multipart manually to avoid FastAPI list coercion edge-cases (422 drift).
+    try:
+        form = await request.form()
+    except Exception as e:
         return _err(
             400,
-            "No files received. Send multipart field 'files' (preferred) or legacy 'file'.",
+            f"Invalid multipart form: {type(e).__name__}: {e}",
         )
 
-    if len(incoming) > max_files:
+    uploads = _collect_uploads(form)
+    if not uploads:
+        return _err(
+            400,
+            "No files received. Send multipart fields 'files' (preferred, repeatable) or legacy 'file'.",
+        )
+
+    if len(uploads) > max_files:
         return _err(
             413,
-            f"Too many files: received={len(incoming)} exceeds max_files={max_files}.",
+            f"Too many files: received={len(uploads)} exceeds max_files={max_files}.",
+            files_received=len(uploads),
         )
 
-    store = get_store()
-
+    warnings: list[str] = []
     total_bytes = 0
     file_blobs: list[tuple[str, bytes]] = []
-    warnings: list[str] = []
 
-    for uf in incoming:
-        name = _safe_name(uf)
+    for uf in uploads:
+        name = _safe_name(getattr(uf, "filename", None))
+
         try:
-            ct = (uf.content_type or "").strip().lower()
+            ct = (getattr(uf, "content_type", "") or "").strip().lower()
             if ct and (ct not in _ALLOWED_JSON_CT) and (not ct.endswith("+json")):
                 warnings.append(f"{name}: unexpected content-type '{ct}' (still attempting JSON parse).")
 
             try:
-                blob = await _read_limited(uf, limit=max_bytes_per_file)
+                blob = await _read_limited_bytes(uf, per_file_limit=max_bytes_per_file)
             except ValueError as ve:
-                return _err(413, str(ve), extra={"files_received": len(incoming)})
+                return _err(413, str(ve), files_received=len(uploads))
 
             total_bytes += len(blob)
             if total_bytes > max_total_bytes:
                 return _err(
                     413,
                     f"Total upload too large: total_bytes={total_bytes} exceeds max_total_bytes={max_total_bytes}.",
-                    extra={"files_received": len(incoming)},
+                    files_received=len(uploads),
                 )
 
             file_blobs.append((name, blob))
         finally:
-            # prevent fd leaks under heavy multipart loads
             try:
                 await uf.close()
             except Exception:
                 pass
 
-    # Merge (Kai-only). Bad krystals should not poison the run.
+    store = get_store()
+
     try:
         report = store.inhale_files(file_blobs)
     except Exception as e:
         return _err(
             500,
             f"INHALE failed: {type(e).__name__}: {e}",
-            extra={"files_received": len(file_blobs)},
+            files_received=len(file_blobs),
         )
 
     if warnings:
         report.errors.extend(warnings)
 
+    # Avoid duplicate work: if we compute state, we already have urls in state.urls.
     state: SigilState | None = None
     urls: list[str] | None = None
 
-    # Avoid duplicate work: if we compute state, we already have urls in state.urls
     if include_state:
         state = store.get_state()
         if include_urls:
@@ -191,7 +234,7 @@ def state() -> SigilState:
 def exhale(
     mode: Literal["urls", "state"] = Query(
         "urls",
-        description="urls = JSON list of canonical URLs; state = full merged state object",
+        description="urls = SigilExplorer import format (JSON list of canonical URLs); state = full merged state object",
     ),
 ) -> ExhaleResponse:
     store = get_store()
