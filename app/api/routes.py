@@ -10,8 +10,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
-from app.core.state_store import get_store
 from app.models.state import ExhaleResponse, InhaleResponse, SigilState
+from app.core.state_store import get_store, SigilStateStore
+
 
 router = APIRouter()
 
@@ -90,6 +91,11 @@ def _inhale_error(
         errors=(errors if errors is not None else [message]),
     ).model_dump(exclude_none=False)
     return JSONResponse(status_code=status_code, content=payload)
+
+def _no_store_cache_headers(response: Response, *, etag: str) -> None:
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Surrogate-Control"] = "no-store"
 
 
 async def _collect_uploads(request: Request) -> list[UploadFile]:
@@ -297,6 +303,41 @@ def seal(request: Request, response: Response) -> SealResponse | Response:
     _no_store_cache_headers(response, etag=etag)
     return SealResponse(seal=s)
 
+
+@router.post(
+    "/merge",
+    summary="STATELESS: upload → merge → exhale (no persistence)",
+    response_model=ExhaleResponse,
+)
+async def merge(
+    request: Request,
+    response: Response,
+    mode: Literal["urls", "state"] = Query("urls"),
+    max_bytes_per_file: int = Query(10_000_000, ge=1_000, le=100_000_000),
+) -> ExhaleResponse:
+    uploads = await _collect_uploads(request)
+    if not uploads:
+        return ExhaleResponse(status="ok", mode=mode, urls=[], state=None)
+
+    file_blobs: list[tuple[str, bytes]] = []
+    for up in uploads:
+        blob, _notes = await _read_upload_capped(up, max_bytes=max_bytes_per_file)
+        if blob is None:
+            continue
+        file_blobs.append((up.filename or "krystal.json", blob))
+
+    # ✅ Stateless store: new instance, NO persist_path
+    store = SigilStateStore(persist_path=None)
+
+    await anyio.to_thread.run_sync(store.inhale_files, file_blobs)
+
+    seal = store.get_seal()
+    _no_store_cache_headers(response, etag=_etag_from_seal(seal))
+
+    if mode == "urls":
+        return ExhaleResponse(status="ok", mode="urls", urls=store.exhale_urls(), state=None)
+
+    return ExhaleResponse(status="ok", mode="state", urls=None, state=store.get_state())
 
 @router.get(
     "/state",

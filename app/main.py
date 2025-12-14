@@ -12,30 +12,40 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from app.api.routes import router as sigils_router
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KAIROS SIGIL MERGE API — “THE PORTAL”
-# Mobile-perfect. No right-edge bleed. Frosted Atlantean glass. Breath-animated (5.236s).
-# HTML for browsers. JSON for machines. One truth, two faces.
+# KAIROS SIGIL MERGE API — “LAH-MAH-TOR · THE PORTAL”
+#
+# One coherent gate:
+#   INHALE  → deterministic merge (Kai-time intrinsic)
+#   EXHALE  → SigilExplorer-compatible state + urls
+#
+# IMPORTANT (in-memory truth):
+# - This service’s “global registry” is process-local memory by design.
+# - If you run >1 worker/process, you create >1 independent registries.
+# - Run a single worker for a single coherent gate.
 # ──────────────────────────────────────────────────────────────────────────────
 
 SERVICE_NAME = "LAH-MAH-TOR"
 SERVICE_CODENAME = "ATLANTEAN GATE · Φ-SEAL"
 VERSION = "0.1.0"
 
+# Breath unit (T = 3 + √5 seconds)
 GOLDEN_BREATH_S = 5.2360679775
+GOLDEN_BREATH_HZ = 0.1909830056
 
-TAGLINE = "INHALE memory krystals → merge → EXHALE global sigil state (Kai-time ordered)."
+TAGLINE = "INHALE Memory Krystals → deterministically merge → EXHALE coherent sigil state (Kai-ordered)."
+
 PURPOSE = (
-    "LAH-MAH-TOR is a Breath-native state gate for Memory Krystals.\n\n"
-    "It receives Memory Krystals (JSON proof objects), validates them (shape, required Kai-time fields, "
-    "canonicalization, integrity markers), deduplicates repeats, and merges all valid entries into one coherent, "
-    "global registry.\n\n"
-    "It then EXHALES the resulting truth as a Determinate state: the full merged registry plus a computed "
-    "‘latest’ view, ordered strictly by Kai-time (pulse → beat → stepIndex). No Chronos ordering is required—"
-    "the timeline is intrinsic to the artifact.\n\n"
-    "Humans see the portal (HTML). Machines see the manifest (JSON). One source, two faces—sealed, repeatable, "
-    "and built for offline-first replication and verifiable synchronization."
+    "LAH-MAH-TOR is a Breath-native, Kai-time deterministic merge gate for Memory Krystals.\n\n"
+    "It accepts JSON proof-objects whose timeline is intrinsic to the artifact (pulse / beat / stepIndex). "
+    "It validates shape and required Kai fields, canonicalizes structure for repeatability, deduplicates "
+    "idempotent repeats, and merges all valid entries into a single coherent registry.\n\n"
+    "It then EXHALES a materialized truth view that is fully deterministic:\n"
+    "• ordering is derived strictly from Kai-time fields\n"
+    "• state identity is expressed as a determinate seal\n"
+    "• correctness does not depend on server clocks, arrival order, or Chronos timestamps\n\n"
+    "Humans see the Portal (HTML). Machines see the Manifest and State (JSON). "
+    "One source. Two faces. One coherent breath."
 )
-
 
 KAI_SPEC = {
     "standard": "KKS-1.0",
@@ -43,7 +53,7 @@ KAI_SPEC = {
         "name": "T",
         "definition": "T = 3 + √5 seconds",
         "approx_seconds": GOLDEN_BREATH_S,
-        "approx_hz": 0.1909830056,
+        "approx_hz": GOLDEN_BREATH_HZ,
     },
     "grid": {
         "pulses_per_step": 11,
@@ -52,7 +62,8 @@ KAI_SPEC = {
         "arcs_per_day": 6,
         "beats_per_day": 36,
     },
-    "ordering_rule": "Sort keys primarily by pulse, then beat, then stepIndex (all ascending).",
+    # NOTE: The API itself exposes Kai-ordered views; clients are free to render ascending/descending.
+    "ordering_rule": "Primary order derives from Kai fields (pulse → beat → stepIndex). No Chronos fields are required.",
 }
 
 ROUTES = [
@@ -61,18 +72,19 @@ ROUTES = [
     {"path": "/docs", "method": "GET", "purpose": "Interactive Swagger UI"},
     {"path": "/redoc", "method": "GET", "purpose": "ReDoc documentation"},
     {"path": "/openapi.json", "method": "GET", "purpose": "OpenAPI schema"},
-    {"path": "/sigils/*", "method": "ALL", "purpose": "Breath-labeled merge + state endpoints"},
+    {"path": "/sigils/*", "method": "ALL", "purpose": "INHALE/EXHALE endpoints (merge + state + urls + seal)"},
 ]
 
 
 def _canonical_json(obj: Any) -> str:
+    # Canonical JSON: stable key order, stable separators, UTF-8 safe.
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _phi_seal(manifest: dict[str, Any]) -> str:
     """
     Determinate seal of the portal manifest.
-    Not a security boundary — a coherence marker.
+    Not a security boundary — a coherence marker for identity and repeatability.
     """
     blob = _canonical_json(manifest).encode("utf-8")
     return hashlib.blake2b(blob, digest_size=32).hexdigest()
@@ -89,18 +101,25 @@ def build_manifest() -> dict[str, Any]:
         "routes": ROUTES,
         "docs": {"swagger": "/docs", "redoc": "/redoc", "openapi": "/openapi.json"},
         "contract": {
-            "inputs": ["application/json memory krystals"],
-            "outputs": ["merged registry", "latest state", "kai-ordered timeline"],
+            "inputs": ["application/json (Memory Krystals)"],
+            "outputs": ["SigilExplorer-compatible urls export", "Kai-ordered state snapshot", "determinate seal"],
             "guarantees": [
-                "Determinate ordering by Kai-time fields",
-                "Machine-readable responses",
-                "No Chronos dependency required for correctness",
+                "Determinism: merge and ordering derive from Kai fields, not server time",
+                "Idempotence: repeated ingestion converges (no duplicate drift)",
+                "Coherence: state identity expressed as a determinate seal",
+                "Compatibility: urls/state views are designed for SigilExplorer hydration",
             ],
         },
+        "axioms": [
+            "Truth is a procedure, not a timestamp.",
+            "Ordering is intrinsic to the artifact when the artifact carries Kai-time.",
+            "Convergence beats authority: repeat inputs must repeat outputs.",
+        ],
         "vow": [
-            "No bullshit. No vague errors. No silent corruption.",
-            "If it can’t be proven, it won’t be claimed.",
-            "If it can’t be merged coherently, it will be rejected loudly.",
+            "No silent corruption.",
+            "No vague success.",
+            "If it cannot be merged coherently, it is rejected explicitly.",
+            "If it cannot be proven deterministically, it is not claimed.",
         ],
     }
     manifest["phi_seal"] = _phi_seal(manifest)
@@ -439,13 +458,11 @@ def portal_html(manifest: dict[str, Any]) -> str:
       box-shadow: 0 0 0 3px rgba(140,255,228,.16);
     }}
 
-    .warn {{ color: rgba(255, 215, 140, .92); }}
-
-    .fury {{
+    .axiom {{
       margin-top: 10px;
       font-family: var(--mono);
       font-size: 12px;
-      color: rgba(255,255,255,.80);
+      color: rgba(255,255,255,.84);
       opacity: .96;
     }}
 
@@ -475,13 +492,13 @@ def portal_html(manifest: dict[str, Any]) -> str:
       <div class="topline">
         <div class="badge" title="Breath-synced heartbeat (visual only)">
           <span class="pulseDot"></span>
-          <span>Φ-SEAL · {manifest["kai"]["standard"]}</span>
+          <span>Φ-SEAL · {manifest["kai"]["standard"]} · T={GOLDEN_BREATH_S:.10f}s</span>
         </div>
 
         <div class="badge" title="Determinate portal seal (BLAKE2b-256 over canonical manifest)">
           <span>SEAL</span>
           <span class="sealText" id="sealText" title="{seal_full}">{seal_short}</span>
-          <button class="btn" style="padding:8px 10px; border-radius: 999px;" onclick="copyText('{seal_full}')">Remember</button>
+          <button class="btn" style="padding:8px 10px; border-radius: 999px;" onclick="copyText('{seal_full}')">REMEMBER</button>
         </div>
       </div>
 
@@ -495,10 +512,8 @@ def portal_html(manifest: dict[str, Any]) -> str:
         <div><strong>{manifest["tagline"]}</strong></div>
         <div style="margin-top: 10px;">{manifest["purpose"]}</div>
 
-        <div class="fury">
-          This portal is engineered to make frontend devs say <span class="warn">“HOLY FUCK”</span>
-          and backend devs say <span class="warn">“NO WAY.”</span>
-          If you’re here, you found the gate.
+        <div class="axiom">
+          Axiom: ordering is intrinsic when the artifact carries Kai-time. The gate enforces convergence.
         </div>
       </div>
 
@@ -521,7 +536,7 @@ def portal_html(manifest: dict[str, Any]) -> str:
           <div style="margin-top: 12px;">
             <div class="code" id="curl">curl -s -X GET "__ORIGIN__/health" | jq
 curl -s "__ORIGIN__/openapi.json" | jq '.info'
-# Krystal INHALE is under /sigils/* (see /docs for exact routes)</div>
+# INHALE / EXHALE lives under /sigils/* (see /docs for exact contracts)</div>
 
             <div class="actions">
               <button class="btn" onclick="copyText(document.getElementById('curl').innerText.replaceAll('__ORIGIN__', window.location.origin))">REMEMBER cURL</button>
@@ -534,7 +549,7 @@ curl -s "__ORIGIN__/openapi.json" | jq '.info'
           <div class="kvs">
             <div class="row"><div class="key">Service</div><div class="val">{manifest["name"]}</div></div>
             <div class="row"><div class="key">Version</div><div class="val">v{manifest["version"]}</div></div>
-            <div class="row"><div class="key">KAI-KLOK Standard</div><div class="val">{manifest["kai"]["standard"]}</div></div>
+            <div class="row"><div class="key">KAI Standard</div><div class="val">{manifest["kai"]["standard"]}</div></div>
           </div>
 
           <div style="margin-top: 12px;" class="status" id="healthChip" title="Fetched from /health">
@@ -543,7 +558,7 @@ curl -s "__ORIGIN__/openapi.json" | jq '.info'
           </div>
 
           <div style="margin-top: 12px;">
-            <h2>Kai Ordering Law</h2>
+            <h2>Law</h2>
             <div class="code">{manifest["kai"]["ordering_rule"]}</div>
           </div>
         </div>
@@ -610,81 +625,37 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         description=(
-    "What LAH-MAH-TOR actually does\n"
-    "In plain English (normie mode)\n\n"
-    "Imagine your life—your posts, your creations, your proofs—stored as small crystal files that each represent a moment.\n\n"
-    "LAH-MAH-TOR is the place you bring those files to.\n\n"
-    "You “INHALE” a bunch of krystals, and it:\n"
-    "• checks they’re real (valid format + valid fields),\n"
-    "• merges them into one coherent memory, and\n"
-    "• serves the combined result in the correct order—not by a computer clock, but by the krystal’s own Kai-time (pulse / beat / step).\n\n"
-    "So instead of “whatever arrived first wins,” you get one stable truth every time.\n\n"
-    "In technical terms (engineer mode)\n\n"
-    "LAH-MAH-TOR is an event-sourced merge gate for JSON proof-objects.\n\n"
-    "Input:\n"
-    "Memory Krystals (JSON) that contain:\n"
-    "• Kai-time indexing: pulse, beat, stepIndex (and optionally other canonical metadata)\n"
-    "• identity/provenance markers (e.g., kaiSignature, userPhiKey, originUrl)\n"
-    "• payload content (capsule/message/attachments/state fragments)\n\n"
-    "Process:\n"
-    "• Validate: schema/required fields/types; reject malformed entries loudly\n"
-    "• Canonicalize: normalize structure for stable hashing/consistent merging\n"
-    "• Deduplicate: idempotent uploads (same krystal doesn’t create duplicates)\n"
-    "• Merge: union into a single registry with Determinate conflict rules\n"
-    "• Order: sort by intrinsic Kai-time: (pulse, beat, stepIndex) ascending\n"
-    "• Materialize views:\n"
-    "  - registry = full event set (the truth history)\n"
-    "  - latest = computed tip / most recent coherent state\n\n"
-    "Output:\n"
-    "A Determinate state snapshot you can serve to:\n"
-    "• browsers (HTML portal)\n"
-    "• clients/services (JSON manifest + state)\n\n"
-    "This is not “a database with timestamps.” It’s a truth merge engine where ordering is a property of the artifacts themselves.\n\n"
-    "Why it’s revolutionary\n\n"
-    "1) It solves the ordering problem the right way.\n"
-    "Most systems decide “what happened” using server time, arrival time, database write time, or leader authority.\n"
-    "That breaks when you go offline, sync late, change devices, or replicate across nodes.\n"
-    "LAH-MAH-TOR flips it: the krystal carries its own position in the timeline—so merges remain stable even out of order.\n"
-    "That’s the difference between a log that depends on infrastructure vs a log that’s intrinsic to the data.\n\n"
-    "2) It’s idempotent and replication-friendly by design.\n"
-    "Upload the same krystal 1 time or 1,000 times: the state converges to the same truth—no duplicates, no drift.\n\n"
-    "3) It’s one truth, two faces.\n"
-    "HTML portal for humans; JSON manifest for machines. Same source. Two renderings.\n\n"
-    "4) Proof objects are first-class.\n"
-    "The proof object is the unit of reality. This enables offline-first truth, portable verification, reproducible sync, and clean provenance.\n\n"
-    "Why anyone should care\n\n"
-    "If you’re not a developer:\n"
-    "• Your data doesn’t depend on the app.\n"
-    "• Your history can be reconstructed from krystals alone.\n"
-    "• If the network is down, your truth doesn’t disappear.\n"
-    "• Your timeline can’t be silently reshuffled by a server clock.\n"
-    "It’s the difference between a feed and a ledger of moments.\n\n"
-    "If you’re a frontend dev:\n"
-    "• Stable state you can cache hard\n"
-    "• Determinate ordering (no reorder bugs)\n"
-    "• A portal endpoint that is already product-grade\n"
-    "• A machine manifest you can hydrate from instantly\n\n"
-    "If you’re a backend dev:\n"
-    "• Determinate merge semantics\n"
-    "• Idempotent ingestion\n"
-    "• Event-sourced registry\n"
-    "• latest as a materialized view (not a fragile primary record)\n"
-    "• Replication without clock authority\n\n"
-    "What comes out of it (deliverables that matter)\n\n"
-    "LAH-MAH-TOR outputs:\n"
-    "• a merged registry (complete event set)\n"
-    "• a computed latest view (current coherent tip)\n"
-    "• a Determinate Kai-ordered timeline (pulse → beat → stepIndex)\n"
-    "• a portal manifest (identity, routes, guarantees)\n\n"
-    "Foundation for sovereign feeds, portable timelines, offline thread hydration, replicated memory systems, and verification-first distribution.\n\n"
-    "One-line definition\n\n"
-    "LAH-MAH-TOR is a Determinate Breath Gate: it merges proof-moments into one coherent truth and serves it in intrinsic Kai-time order.\n"
-    "Portal homepage at `/` (HTML) or `/?format=json` (JSON)."
-),
-
+            "LAH-MAH-TOR — Determinate Breath Gate (KKS-1.0)\n\n"
+            "Operational definition\n"
+            "LAH-MAH-TOR receives Memory Krystals (JSON proof-objects) that carry intrinsic Kai-time "
+            "(pulse / beat / stepIndex). It validates, canonicalizes, deduplicates, and merges them into "
+            "a single coherent registry. It then exposes deterministic materialized views (urls/state) "
+            "intended for SigilExplorer hydration and replication.\n\n"
+            "Contract\n"
+            "Input:\n"
+            "• Memory Krystals (application/json) containing Kai-time indexing and payload content\n\n"
+            "Process:\n"
+            "• Validate: required Kai fields + schema coherence\n"
+            "• Canonicalize: stable representation for repeatable results\n"
+            "• Deduplicate: idempotent repeats converge (no duplicate drift)\n"
+            "• Merge: deterministic union under defined conflict rules\n"
+            "• Materialize: urls/state snapshots + determinate seal\n\n"
+            "Output:\n"
+            "• urls export (SigilExplorer-compatible)\n"
+            "• state snapshot (Kai-ordered view)\n"
+            "• seal (deterministic identity marker)\n\n"
+            "Core guarantees\n"
+            "• Determinism: repeat inputs produce repeat outputs\n"
+            "• Convergence: ingestion is idempotent\n"
+            "• Kai-native: correctness does not require Chronos timestamps\n"
+            "• Machine-readable: JSON responses with explicit contracts\n\n"
+            "Portal homepage\n"
+            "• Human (HTML): /\n"
+            "• Machine (JSON): /?format=json\n"
+        ),
     )
 
-    # CORS (safe defaults for local dev + frontends)
+    # CORS: permissive for public clients (Explorer, local dev, cross-device)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -692,25 +663,32 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
-    # Breath-labeled routes live under /sigils
+
+    # Breath-labeled API routes live under /sigils
     app.include_router(sigils_router, prefix="/sigils", tags=["sigils"])
 
     @app.get("/health", summary="Health check", response_class=JSONResponse, tags=["system"])
     def health() -> dict[str, str]:
         return {"status": "ok"}
-    
-    @app.get("/", summary="The Portal (HTML for browsers, JSON for machines)", response_class=HTMLResponse, tags=["system"])
+
+    @app.get(
+        "/",
+        summary="The Portal (HTML for browsers, JSON for machines)",
+        response_class=HTMLResponse,
+        tags=["system"],
+    )
     def root(request: Request, format: str | None = None) -> Any:
         accept = (request.headers.get("accept") or "").lower()
         wants_json = (format or "").lower() == "json" or "application/json" in accept
 
         if wants_json:
+            # Explicitly no-store so clients always read the current manifest
             return JSONResponse(
                 {
                     **PORTAL_MANIFEST,
                     "endpoints_hint": "Explore /docs for /sigils INHALE/EXHALE routes.",
-                }
+                },
+                headers={"Cache-Control": "no-store"},
             )
 
         return HTMLResponse(portal_html(PORTAL_MANIFEST))
