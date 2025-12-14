@@ -524,7 +524,7 @@ curl -s "__ORIGIN__/openapi.json" | jq '.info'
 # Krystal INHALE is under /sigils/* (see /docs for exact routes)</div>
 
             <div class="actions">
-              <button class="btn" onclick="copyText(document.getElementById('curl').innerText.replaceAll('__ORIGIN__', window.location.origin))">Remember cURL</button>
+              <button class="btn" onclick="copyText(document.getElementById('curl').innerText.replaceAll('__ORIGIN__', window.location.origin))">REMEMBER cURL</button>
             </div>
           </div>
         </div>
@@ -534,7 +534,7 @@ curl -s "__ORIGIN__/openapi.json" | jq '.info'
           <div class="kvs">
             <div class="row"><div class="key">Service</div><div class="val">{manifest["name"]}</div></div>
             <div class="row"><div class="key">Version</div><div class="val">v{manifest["version"]}</div></div>
-            <div class="row"><div class="key">Kai Standard</div><div class="val">{manifest["kai"]["standard"]}</div></div>
+            <div class="row"><div class="key">KAI-KLOK Standard</div><div class="val">{manifest["kai"]["standard"]}</div></div>
           </div>
 
           <div style="margin-top: 12px;" class="status" id="healthChip" title="Fetched from /health">
@@ -698,7 +698,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health", summary="Health check", response_class=JSONResponse, tags=["system"])
     def health() -> dict[str, str]:
-        return {"status": "OPERATIONAL  "}
+        return {"status": "ok"}
     
     @app.get("/", summary="The Portal (HTML for browsers, JSON for machines)", response_class=HTMLResponse, tags=["system"])
     def root(request: Request, format: str | None = None) -> Any:
