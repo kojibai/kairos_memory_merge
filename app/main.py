@@ -492,13 +492,13 @@ def portal_html(manifest: dict[str, Any]) -> str:
       <div class="topline">
         <div class="badge" title="Breath-synced heartbeat (visual only)">
           <span class="pulseDot"></span>
-          <span>Φ-SEAL · {manifest["kai"]["standard"]} · T={GOLDEN_BREATH_S:.10f}s</span>
+          <span>Φ-SEAL · <a href="https://github.com/kojibai/klok" target="_blank" rel="noreferrer">{manifest["kai"]["standard"]}</a> · T={GOLDEN_BREATH_S:.10f}s</span>
         </div>
 
         <div class="badge" title="Determinate portal seal (BLAKE2b-256 over canonical manifest)">
           <span>SEAL</span>
           <span class="sealText" id="sealText" title="{seal_full}">{seal_short}</span>
-          <button class="btn" style="padding:8px 10px; border-radius: 999px;" onclick="copyText('{seal_full}')">REMEMBER</button>
+          <button class="btn" style="padding:8px 10px; border-radius: 999px;" onclick="remember(this, '{seal_full}')">REMEMBER</button>
         </div>
       </div>
 
@@ -506,7 +506,7 @@ def portal_html(manifest: dict[str, Any]) -> str:
 
       <div class="sub">
         <div style="font-family: var(--mono); color: rgba(255,255,255,.84); margin-bottom: 8px;">
-          {manifest["codename"]} · v{manifest["version"]}
+          {manifest["codename"]} · <a href="https://github.com/kojibai/kairos_memory_stream" target="_blank" rel="noreferrer">v{manifest["version"]}</a>
         </div>
 
         <div><strong>{manifest["tagline"]}</strong></div>
@@ -528,9 +528,9 @@ def portal_html(manifest: dict[str, Any]) -> str:
           </div>
 
           <div class="actions">
-            <button class="btn" onclick="copyText(window.location.origin + '/docs')">COPY /docs</button>
-            <button class="btn" onclick="copyText(window.location.origin + '/openapi.json')">COPY /openapi.json</button>
-            <button class="btn" onclick="copyText(window.location.origin + '/health')">COPY /health</button>
+            <button class="btn" onclick="remember(this, window.location.origin + '/docs')">REMEMBER /docs</button>
+            <button class="btn" onclick="remember(this, window.location.origin + '/openapi.json')">REMEMBER /openapi.json</button>
+            <button class="btn" onclick="remember(this, window.location.origin + '/health')">REMEMBER /health</button>
           </div>
 
           <div style="margin-top: 12px;">
@@ -539,7 +539,7 @@ curl -s "__ORIGIN__/openapi.json" | jq '.info'
 # INHALE / EXHALE lives under /sigils/* (see /docs for exact contracts)</div>
 
             <div class="actions">
-              <button class="btn" onclick="copyText(document.getElementById('curl').innerText.replaceAll('__ORIGIN__', window.location.origin))">REMEMBER cURL</button>
+              <button class="btn" onclick="remember(this, document.getElementById('curl').innerText.replaceAll('__ORIGIN__', window.location.origin))">REMEMBER cURL</button>
             </div>
           </div>
         </div>
@@ -548,8 +548,8 @@ curl -s "__ORIGIN__/openapi.json" | jq '.info'
           <h2>Live Status</h2>
           <div class="kvs">
             <div class="row"><div class="key">Service</div><div class="val">{manifest["name"]}</div></div>
-            <div class="row"><div class="key">Version</div><div class="val">v{manifest["version"]}</div></div>
-            <div class="row"><div class="key">KAI Standard</div><div class="val">{manifest["kai"]["standard"]}</div></div>
+            <div class="row"><div class="key">Version</div><div class="val"><a href="https://github.com/kojibai/kairos_memory_stream" target="_blank" rel="noreferrer">v{manifest["version"]}</a></div></div>
+            <div class="row"><div class="key">KAI Standard</div><div class="val"><a href="https://github.com/kojibai/klok" target="_blank" rel="noreferrer">{manifest["kai"]["standard"]}</a></div></div>
           </div>
 
           <div style="margin-top: 12px;" class="status" id="healthChip" title="Fetched from /health">
@@ -589,6 +589,29 @@ curl -s "__ORIGIN__/openapi.json" | jq '.info'
         el.select();
         document.execCommand('copy');
         document.body.removeChild(el);
+      }}
+    }}
+
+    async function remember(btn, t) {{
+      const b = btn;
+      const prev = (b && b.innerText) ? b.innerText : 'REMEMBER';
+      try {{
+        await copyText(t);
+        if (b) {{
+          b.innerText = 'REMEMBERED';
+          b.disabled = true;
+          setTimeout(() => {{
+            b.innerText = prev;
+            b.disabled = false;
+          }}, 1100);
+        }}
+      }} catch (e) {{
+        if (b) {{
+          b.innerText = 'REMEMBERED';
+          setTimeout(() => {{
+            b.innerText = prev;
+          }}, 1100);
+        }}
       }}
     }}
 
