@@ -112,7 +112,7 @@ def _truthy_env(value: str | None) -> bool:
 def _cors_config() -> dict[str, Any]:
     allow_origins = _split_env_list(os.getenv(_CORS_ALLOW_ORIGINS_ENV, ""))
     allow_origin_regex = os.getenv(_CORS_ALLOW_ORIGIN_REGEX_ENV, "").strip() or None
-    allow_credentials = _truthy_env(os.getenv(_CORS_ALLOW_CREDENTIALS_ENV, ""))
+    allow_credentials = _truthy_env(os.getenv(_CORS_ALLOW_CREDENTIALS_ENV, "true"))
     allow_methods = _split_env_list(os.getenv(_CORS_ALLOW_METHODS_ENV, "")) or ["*"]
     allow_headers = _split_env_list(os.getenv(_CORS_ALLOW_HEADERS_ENV, "")) or ["*"]
     expose_headers = _split_env_list(os.getenv(_CORS_EXPOSE_HEADERS_ENV, "")) or [
@@ -124,7 +124,7 @@ def _cors_config() -> dict[str, Any]:
     max_age = int(max_age_raw) if max_age_raw.isdigit() else 600
 
     if not allow_origins and not allow_origin_regex:
-        allow_origins = ["*"]
+        allow_origin_regex = ".*"
 
     if allow_credentials and allow_origins == ["*"] and not allow_origin_regex:
         allow_origins = []
