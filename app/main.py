@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -75,6 +76,14 @@ ROUTES = [
     {"path": "/sigils/*", "method": "ALL", "purpose": "INHALE/EXHALE endpoints (merge + state + urls + seal)"},
 ]
 
+_CORS_ALLOW_ORIGINS_ENV = "KAI_CORS_ALLOW_ORIGINS"
+_CORS_ALLOW_ORIGIN_REGEX_ENV = "KAI_CORS_ALLOW_ORIGIN_REGEX"
+_CORS_ALLOW_CREDENTIALS_ENV = "KAI_CORS_ALLOW_CREDENTIALS"
+_CORS_ALLOW_METHODS_ENV = "KAI_CORS_ALLOW_METHODS"
+_CORS_ALLOW_HEADERS_ENV = "KAI_CORS_ALLOW_HEADERS"
+_CORS_EXPOSE_HEADERS_ENV = "KAI_CORS_EXPOSE_HEADERS"
+_CORS_MAX_AGE_ENV = "KAI_CORS_MAX_AGE"
+
 
 def _canonical_json(obj: Any) -> str:
     # Canonical JSON: stable key order, stable separators, UTF-8 safe.
@@ -88,6 +97,48 @@ def _phi_seal(manifest: dict[str, Any]) -> str:
     """
     blob = _canonical_json(manifest).encode("utf-8")
     return hashlib.blake2b(blob, digest_size=32).hexdigest()
+
+
+def _split_env_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _truthy_env(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cors_config() -> dict[str, Any]:
+    allow_origins = _split_env_list(os.getenv(_CORS_ALLOW_ORIGINS_ENV, ""))
+    allow_origin_regex = os.getenv(_CORS_ALLOW_ORIGIN_REGEX_ENV, "").strip() or None
+    allow_credentials = _truthy_env(os.getenv(_CORS_ALLOW_CREDENTIALS_ENV, ""))
+    allow_methods = _split_env_list(os.getenv(_CORS_ALLOW_METHODS_ENV, "")) or ["*"]
+    allow_headers = _split_env_list(os.getenv(_CORS_ALLOW_HEADERS_ENV, "")) or ["*"]
+    expose_headers = _split_env_list(os.getenv(_CORS_EXPOSE_HEADERS_ENV, "")) or [
+        "ETag",
+        "Cache-Control",
+        "Content-Length",
+    ]
+    max_age_raw = os.getenv(_CORS_MAX_AGE_ENV, "").strip()
+    max_age = int(max_age_raw) if max_age_raw.isdigit() else 600
+
+    if not allow_origins and not allow_origin_regex:
+        allow_origins = ["*"]
+
+    if allow_credentials and allow_origins == ["*"] and not allow_origin_regex:
+        allow_origins = []
+        allow_origin_regex = ".*"
+
+    return {
+        "allow_origins": allow_origins,
+        "allow_origin_regex": allow_origin_regex,
+        "allow_credentials": allow_credentials,
+        "allow_methods": allow_methods,
+        "allow_headers": allow_headers,
+        "expose_headers": expose_headers,
+        "max_age": max_age,
+    }
 
 
 def build_manifest() -> dict[str, Any]:
@@ -678,14 +729,8 @@ def create_app() -> FastAPI:
         ),
     )
 
-    # CORS: permissive for public clients (Explorer, local dev, cross-device)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS: configurable for public clients, local dev, and credentialed apps
+    app.add_middleware(CORSMiddleware, **_cors_config())
 
     # Breath-labeled API routes live under /sigils
     app.include_router(sigils_router, prefix="/sigils", tags=["sigils"])
